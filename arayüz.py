@@ -4,7 +4,6 @@ import subprocess
 import threading
 import os
 import signal
-import sys
 
 class SimulationGUI:
     def __init__(self, root):
@@ -17,41 +16,58 @@ class SimulationGUI:
             "get_data": None
         }
         
+        # Butonlar için ana frame
         self.button_frame = tk.Frame(root)
         self.button_frame.pack(pady=10)
         
-        self.start_world_btn = tk.Button(self.button_frame, text="Start World", command=self.start_world)
-        self.start_world_btn.pack(side=tk.LEFT, padx=5)
+        # Sol taraf: Start ve Stop butonları dikey
+        self.controls_frame = tk.Frame(self.button_frame)
+        self.controls_frame.pack(side=tk.LEFT, padx=10)
         
-        self.start_server_btn = tk.Button(self.button_frame, text="Start Server", command=self.start_server)
-        self.start_server_btn.pack(side=tk.LEFT, padx=5)
+        # World Butonları
+        self.world_frame = tk.Frame(self.controls_frame)
+        self.world_frame.pack(pady=5)
+        self.start_world_btn = tk.Button(self.world_frame, text="Start World", command=self.start_world, width=12)
+        self.start_world_btn.pack()
+        self.stop_world_btn = tk.Button(self.world_frame, text="Stop World", command=self.stop_world, width=12)
+        self.stop_world_btn.pack(pady=2)
         
-        self.get_data_btn = tk.Button(self.button_frame, text="Get Data", command=self.get_data)
-        self.get_data_btn.pack(side=tk.LEFT, padx=5)
+        # Server Butonları
+        self.server_frame = tk.Frame(self.controls_frame)
+        self.server_frame.pack(pady=5)
+        self.start_server_btn = tk.Button(self.server_frame, text="Start Server", command=self.start_server, width=12)
+        self.start_server_btn.pack()
+        self.stop_server_btn = tk.Button(self.server_frame, text="Stop Server", command=self.stop_server, width=12)
+        self.stop_server_btn.pack(pady=2)
         
-        self.stop_world_btn = tk.Button(self.button_frame, text="Stop World", command=self.stop_world)
-        self.stop_world_btn.pack(side=tk.LEFT, padx=5)
+        # Get Data Butonları
+        self.get_data_frame = tk.Frame(self.controls_frame)
+        self.get_data_frame.pack(pady=5)
+        self.start_get_data_btn = tk.Button(self.get_data_frame, text="Start Get Data", command=self.get_data, width=12)
+        self.start_get_data_btn.pack()
+        self.stop_get_data_btn = tk.Button(self.get_data_frame, text="Stop Get Data", command=self.stop_get_data, width=12)
+        self.stop_get_data_btn.pack(pady=2)
         
-        self.stop_server_btn = tk.Button(self.button_frame, text="Stop Server", command=self.stop_server)
-        self.stop_server_btn.pack(side=tk.LEFT, padx=5)
+        # Sağ taraf: Stop All butonu
+        self.stop_all_frame = tk.Frame(self.button_frame)
+        self.stop_all_frame.pack(side=tk.LEFT, padx=10)
+        self.stop_all_btn = tk.Button(self.stop_all_frame, text="Stop All", command=self.stop_all, width=12, height=4)
+        self.stop_all_btn.pack(anchor="center")
         
-        self.stop_get_data_btn = tk.Button(self.button_frame, text="Stop Get Data", command=self.stop_get_data)
-        self.stop_get_data_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_all_btn = tk.Button(self.button_frame, text="Stop All", command=self.stop_all)
-        self.stop_all_btn.pack(side=tk.LEFT, padx=5)
-        
+        # Log alanları için frame
         self.log_frame = tk.Frame(root)
         self.log_frame.pack(pady=10)
         
+        # Simulation & Server Log
         self.sim_server_log_label = tk.Label(self.log_frame, text="Simulation & Server Log")
         self.sim_server_log_label.pack()
         self.sim_server_log = scrolledtext.ScrolledText(self.log_frame, width=80, height=10)
         self.sim_server_log.pack(pady=5)
         
+        # Get Data Log (daha uzun)
         self.get_data_log_label = tk.Label(self.log_frame, text="Get Data Log")
         self.get_data_log_label.pack()
-        self.get_data_log = scrolledtext.ScrolledText(self.log_frame, width=80, height=10)
+        self.get_data_log = scrolledtext.ScrolledText(self.log_frame, width=80, height=20)  # Height 20'ye çıkarıldı
         self.get_data_log.pack(pady=5)
         
     def log(self, message, log_type="sim_server"):
@@ -63,9 +79,7 @@ class SimulationGUI:
             self.sim_server_log.see(tk.END)
     
     def run_command(self, command, process_key):
-        """Komut çalıştır ve çıktıları uygun log'a yaz"""
         try:
-            # Tamponlamayı devre dışı bırakmak için PYTHONUNBUFFERED ve -u ekliyoruz
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             process = subprocess.Popen(
@@ -81,7 +95,6 @@ class SimulationGUI:
             self.processes[process_key] = process
             self.log(f"{process_key.capitalize()} başlatıldı: {command}", process_key if process_key == "get_data" else "sim_server")
             
-            # Gerçek zamanlı çıktı okuma
             while process.poll() is None:
                 line = process.stdout.readline()
                 if line:
@@ -114,7 +127,6 @@ class SimulationGUI:
     
     def get_data(self):
         if self.processes["get_data"] is None:
-            # -u ile tamponlamayı devre dışı bırakıyoruz
             command = "python3 -u get.py"
             thread = threading.Thread(target=self.run_command, args=(command, "get_data"))
             thread.start()
