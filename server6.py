@@ -2,8 +2,11 @@ import asyncio
 import threading
 import logging
 import os
+import subprocess
+import signal
+import time
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 from flask import Flask, jsonify
 from mavsdk import System
 
@@ -16,7 +19,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 @dataclass
 class ServerConfig:
@@ -24,10 +27,14 @@ class ServerConfig:
     port: int = 5000
     num_drones: int = 5
     base_port: int = 14540
+    server_base_port: int = 50051
     telemetry_interval: float = 2.0
+    mavsdk_server_path: str = "/home/baris/.local/lib/python3.10/site-packages/mavsdk/bin/mavsdk_server"
+    connection_timeout: float = 10.0
+    server_startup_delay: float = 5.0
 
 # Flask uygulaması
-app = Flask(__name__)
+app = Flask(_name_)
 
 # Telemetri verilerini saklamak için global sözlük
 telemetry_data: Dict[str, Dict] = {}
@@ -38,26 +45,54 @@ def get_telemetry():
     return jsonify(telemetry_data)
 
 class TelemetryServer:
-    def __init__(self, config: ServerConfig):
+    def _init_(self, config: ServerConfig):
         self.config = config
         self.drones: List[System] = []
+        self.server_processes: List[subprocess.Popen] = []
         self._running = False
+        self._cleanup_done = False
+
+    async def start_mavsdk_servers(self) -> bool:
+        """Her drone için ayrı bir mavsdk_server başlat"""
+        try:
+            for i in range(self.config.num_drones):
+                udp_port = self.config.base_port + i
+                server_port = self.config.server_base_port + i
+                cmd = f"{self.config.mavsdk_server_path} -p {server_port} udpin://127.0.0.1:{udp_port}"
+                process = subprocess.Popen(
+                    cmd.split(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                self.server_processes.append(process)
+                await asyncio.sleep(0.5)  # Her server için kısa bir bekleme
+            
+            # Server'ların başlaması için bekle
+            await asyncio.sleep(self.config.server_startup_delay)
+            return True
+        except Exception as e:
+            logger.error(f"mavsdk_server'lar başlatılırken hata: {str(e)}")
+            return False
 
     async def connect_drone(self, drone: System, drone_id: int) -> bool:
         """Drone'a bağlan"""
         port = self.config.base_port + drone_id
+        server_port = self.config.server_base_port + drone_id
         try:
-            logger.info(f"Drone {drone_id} bağlanıyor: udp://:{port}")
-            await drone.connect(system_address=f"udp://:{port}")
+            await drone.connect(system_address=f"udp://127.0.0.1:{port}")
             
             # Bağlantı durumunu kontrol et
+            timeout = self.config.connection_timeout
             async for state in drone.core.connection_state():
                 if state.is_connected:
-                    logger.info(f"Drone {drone_id} başarıyla bağlandı!")
+                    logger.info(f"Drone {drone_id} başarıyla bağlandı")
                     return True
-                await asyncio.sleep(1)
-            
-            logger.error(f"Drone {drone_id} bağlantısı başarısız")
+                await asyncio.sleep(0.1)
+                timeout -= 0.1
+                if timeout <= 0:
+                    logger.error(f"Drone {drone_id} bağlantı zaman aşımına uğradı")
+                    return False
             return False
         except Exception as e:
             logger.error(f"Drone {drone_id} bağlantı hatası: {str(e)}")
@@ -100,12 +135,18 @@ class TelemetryServer:
         logger.info("Telemetri toplama başlatılıyor...")
         self._running = True
 
+        # mavsdk_server'ları başlat
+        if not await self.start_mavsdk_servers():
+            logger.error("mavsdk_server'lar başlatılamadı!")
+            self._running = False
+            return
+
         # Drone'ları bağla
         for i in range(self.config.num_drones):
             drone_id = f"drone_{i}"
-            drone = System()  # Yeni drone oluştur
-            if await self.connect_drone(drone, i):  # Drone'u bağla
-                self.drones.append(drone)  # Bağlantı başarılıysa listeye ekle
+            drone = System(mavsdk_server_address="localhost", port=self.config.server_base_port + i)
+            if await self.connect_drone(drone, i):
+                self.drones.append(drone)
                 telemetry_data[drone_id] = {"position": {}, "velocity": {}, "battery": 0}
             else:
                 logger.error(f"Drone {i} başlatılamadı, diğer drone'lar devam ediyor...")
@@ -124,16 +165,28 @@ class TelemetryServer:
 
     async def stop(self):
         """Telemetri toplama işlemini durdur"""
+        if self._cleanup_done:
+            return
+            
         self._running = False
+        self._cleanup_done = True
+        
+        # Drone bağlantılarını kapat
         for drone in self.drones:
             try:
-                # Drone bağlantısını kapat
                 await drone.close()
-                logger.info("Drone bağlantısı kapatıldı")
             except Exception as e:
                 logger.error(f"Drone bağlantısı kapatılırken hata: {str(e)}")
-                # Hata durumunda bile devam et
-                continue
+        
+        # mavsdk_server'ları sonlandır
+        for proc in self.server_processes:
+            try:
+                proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=5)  # 5 saniye bekle
+            except subprocess.TimeoutExpired:
+                proc.kill()  # Zaman aşımı olursa zorla sonlandır
+            except Exception as e:
+                logger.error(f"mavsdk_server sonlandırılırken hata: {str(e)}")
 
 def run_flask(config: ServerConfig):
     """Flask sunucusunu başlat"""
@@ -177,8 +230,7 @@ def main():
             threading.Event().wait()
     except KeyboardInterrupt:
         logger.info("Program kapatılıyor...")
-        # Programı düzgün bir şekilde sonlandır
         os._exit(0)
 
-if __name__ == "__main__":
-    main()
+if _name_ == "_main_":
+    main()

@@ -89,12 +89,14 @@ class SimulationManager:
         """Belirli bir drone'u başlat"""
         port = self.config.base_port + drone_id
         pose = self.config.positions[drone_id]
+        system_id = drone_id + 1  # SYSID_THISMAV 1’den başlar (1, 2, 3, 4, 5)
         
         cmd = (
             f"PX4_SYS_AUTOSTART=4001 "
             f"PX4_GZ_MODEL_POSE='{pose}' "
             f"PX4_SIM_MODEL=gz_x500 "
             f"PX4_SITL_PORT={port} "
+            f"SYSID_THISMAV={system_id} "  # Her drone için farklı SYSID_THISMAV
             f"{self.config.px4_path} -i {drone_id}"
         )
         
