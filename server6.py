@@ -19,7 +19,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ServerConfig:
@@ -34,7 +34,7 @@ class ServerConfig:
     server_startup_delay: float = 5.0
 
 # Flask uygulaması
-app = Flask(_name_)
+app = Flask(__name__)
 
 # Telemetri verilerini saklamak için global sözlük
 telemetry_data: Dict[str, Dict] = {}
@@ -232,5 +232,5 @@ def main():
         logger.info("Program kapatılıyor...")
         os._exit(0)
 
-if _name_ == "_main_":
-    main()
+if __name__ == "__main__":
+    main()
