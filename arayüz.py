@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import scrolledtext
 import subprocess
 import threading
+import os
+import signal
 
 class SimulationGUI:
     def __init__(self, root):
@@ -53,27 +55,35 @@ class SimulationGUI:
         self.log_text.see(tk.END)
     
     def run_command(self, command, process_key):
-        """Komut çalıştır ve cmd çıktılarını log'a yaz"""
+        """Komut çalıştır ve çıktıları log'a yaz"""
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-            self.processes[process_key] = process  # Süreci kaydet
-            for line in iter(process.stdout.readline, ''):
+            # shell=True ile cmd gibi çalıştırıyoruz, böylece ROS komutları da desteklenir
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, preexec_fn=os.setsid if os.name != 'nt' else None)
+            self.processes[process_key] = process
+            self.log(f"{process_key.capitalize()} başlatıldı: {' '.join(command) if isinstance(command, list) else command}")
+            
+            # Çıktıları gerçek zamanlı olarak oku
+            while process.poll() is None:
+                line = process.stdout.readline()
                 if line:
                     self.log(line.strip())
-            for line in iter(process.stderr.readline, ''):
+            # Kalan çıktıları al
+            for line in process.stdout.readlines():
                 if line:
-                    self.log(f"ERROR: {line.strip()}")
-            process.wait()
-            self.processes[process_key] = None  # Süreç bittiğinde temizle
+                    self.log(line.strip())
+                    
+            self.processes[process_key] = None
+            self.log(f"{process_key.capitalize()} tamamlandı.")
         except Exception as e:
-            self.log(f"Komut çalıştırılırken hata: {str(e)}")
+            self.log(f"Hata ({process_key}): {str(e)}")
             self.processes[process_key] = None
     
     def start_world(self):
         """Gazebo simülasyonunu başlat"""
         if self.processes["world"] is None:
-            self.log("Starting Gazebo simulation...")
-            thread = threading.Thread(target=self.run_command, args=(["python3", "launch_world.py"], "world"))
+            # Örnek: ROS ile Gazebo başlatma (senin komutuna göre değiştir)
+            command = "python3 gazebo_simulation.py"  # Gerçek komutunu buraya yaz
+            thread = threading.Thread(target=self.run_command, args=(command, "world"))
             thread.start()
         else:
             self.log("World zaten çalışıyor!")
@@ -81,8 +91,8 @@ class SimulationGUI:
     def start_server(self):
         """Server'ı başlat"""
         if self.processes["server"] is None:
-            self.log("Starting server...")
-            thread = threading.Thread(target=self.run_command, args=(["python3", "server.py"], "server"))
+            command = "python3 server6.py"  # Gerçek dosya adını buraya yaz
+            thread = threading.Thread(target=self.run_command, args=(command, "server"))
             thread.start()
         else:
             self.log("Server zaten çalışıyor!")
@@ -90,8 +100,8 @@ class SimulationGUI:
     def get_data(self):
         """Server'dan veri al"""
         if self.processes["get_data"] is None:
-            self.log("Fetching data from server...")
-            thread = threading.Thread(target=self.run_command, args=(["python3", "get_data.py"], "get_data"))
+            command = "python3 get.py"  # Gerçek dosya adını buraya yaz
+            thread = threading.Thread(target=self.run_command, args=(command, "get_data"))
             thread.start()
         else:
             self.log("Get Data zaten çalışıyor!")
@@ -100,19 +110,30 @@ class SimulationGUI:
         """Belirtilen süreci durdur"""
         process = self.processes.get(process_key)
         if process is not None:
-            process.terminate()  # Süreci sonlandır
             try:
-                process.wait(timeout=2)  # 2 saniye bekle
-            except subprocess.TimeoutExpired:
-                process.kill()  # Eğer terminate işe yaramazsa zorla kapat
-            self.processes[process_key] = None
-            self.log(f"{process_key.capitalize()} durduruldu.")
+                if os.name == 'nt':  # Windows
+                    subprocess.call(['taskkill', '/F', '/T', '/PID', str(process.pid)])
+                else:  # Unix/Linux
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Grup olarak sonlandır
+                process.wait(timeout=3)
+                self.log(f"{process_key.capitalize()} durduruldu.")
+            except Exception as e:
+                self.log(f"{process_key.capitalize()} durdurulurken hata: {str(e)}")
+                if os.name != 'nt':
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)  # Zorla kapat
+                self.log(f"{process_key.capitalize()} zorla kapatıldı.")
+            finally:
+                self.processes[process_key] = None
         else:
             self.log(f"{process_key.capitalize()} zaten kapalı veya çalışmıyor.")
     
     def stop_world(self):
         """Gazebo simülasyonunu durdur"""
         self.stop_process("world")
+        # ROS için ek temizlik (opsiyonel)
+        if self.processes["world"] is None:
+            subprocess.run("rosnode kill -a", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("killall -9 gzserver gzclient", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     def stop_server(self):
         """Server'ı durdur"""
@@ -127,6 +148,9 @@ class SimulationGUI:
         self.log("Tüm süreçler durduruluyor...")
         for key in self.processes.keys():
             self.stop_process(key)
+        # ROS ve Gazebo için genel temizlik
+        subprocess.run("rosnode kill -a", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run("killall -9 gzserver gzclient", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":
     root = tk.Tk()
