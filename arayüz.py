@@ -45,66 +45,80 @@ class SimulationGUI:
         self.stop_all_btn = tk.Button(self.button_frame, text="Stop All", command=self.stop_all)
         self.stop_all_btn.pack(side=tk.LEFT, padx=5)
         
-        # Log alanı
-        self.log_text = scrolledtext.ScrolledText(root, width=80, height=20)
-        self.log_text.pack(pady=10)
+        # Log alanları için frame
+        self.log_frame = tk.Frame(root)
+        self.log_frame.pack(pady=10)
         
-    def log(self, message):
-        """Log mesajlarını arayüze ekle"""
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
+        # Birinci Log Alanı: Server ve Simülasyon
+        self.sim_server_log_label = tk.Label(self.log_frame, text="Simulation & Server Log")
+        self.sim_server_log_label.pack()
+        self.sim_server_log = scrolledtext.ScrolledText(self.log_frame, width=80, height=10)
+        self.sim_server_log.pack(pady=5)
+        
+        # İkinci Log Alanı: Get Data
+        self.get_data_log_label = tk.Label(self.log_frame, text="Get Data Log")
+        self.get_data_log_label.pack()
+        self.get_data_log = scrolledtext.ScrolledText(self.log_frame, width=80, height=10)
+        self.get_data_log.pack(pady=5)
+        
+    def log(self, message, log_type="sim_server"):
+        """Log mesajlarını uygun alana ekle"""
+        if log_type == "get_data":
+            self.get_data_log.insert(tk.END, message + "\n")
+            self.get_data_log.see(tk.END)
+        else:  # Varsayılan olarak sim_server
+            self.sim_server_log.insert(tk.END, message + "\n")
+            self.sim_server_log.see(tk.END)
     
     def run_command(self, command, process_key):
-        """Komut çalıştır ve çıktıları log'a yaz"""
+        """Komut çalıştır ve çıktıları uygun log'a yaz"""
         try:
-            # shell=True ile cmd gibi çalıştırıyoruz, böylece ROS komutları da desteklenir
             process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, preexec_fn=os.setsid if os.name != 'nt' else None)
             self.processes[process_key] = process
-            self.log(f"{process_key.capitalize()} başlatıldı: {' '.join(command) if isinstance(command, list) else command}")
+            self.log(f"{process_key.capitalize()} başlatıldı: {command}", process_key if process_key == "get_data" else "sim_server")
             
             # Çıktıları gerçek zamanlı olarak oku
             while process.poll() is None:
                 line = process.stdout.readline()
                 if line:
-                    self.log(line.strip())
+                    self.log(line.strip(), process_key if process_key == "get_data" else "sim_server")
             # Kalan çıktıları al
             for line in process.stdout.readlines():
                 if line:
-                    self.log(line.strip())
+                    self.log(line.strip(), process_key if process_key == "get_data" else "sim_server")
                     
             self.processes[process_key] = None
-            self.log(f"{process_key.capitalize()} tamamlandı.")
+            self.log(f"{process_key.capitalize()} tamamlandı.", process_key if process_key == "get_data" else "sim_server")
         except Exception as e:
-            self.log(f"Hata ({process_key}): {str(e)}")
+            self.log(f"Hata ({process_key}): {str(e)}", process_key if process_key == "get_data" else "sim_server")
             self.processes[process_key] = None
     
     def start_world(self):
         """Gazebo simülasyonunu başlat"""
         if self.processes["world"] is None:
-            # Örnek: ROS ile Gazebo başlatma (senin komutuna göre değiştir)
-            command = "python3 gazebo_simulation.py"  # Gerçek komutunu buraya yaz
+            command = "python3 gazebo_simulation.py"
             thread = threading.Thread(target=self.run_command, args=(command, "world"))
             thread.start()
         else:
-            self.log("World zaten çalışıyor!")
+            self.log("World zaten çalışıyor!", "sim_server")
     
     def start_server(self):
         """Server'ı başlat"""
         if self.processes["server"] is None:
-            command = "python3 server6.py"  # Gerçek dosya adını buraya yaz
+            command = "python3 server6.py"
             thread = threading.Thread(target=self.run_command, args=(command, "server"))
             thread.start()
         else:
-            self.log("Server zaten çalışıyor!")
+            self.log("Server zaten çalışıyor!", "sim_server")
     
     def get_data(self):
         """Server'dan veri al"""
         if self.processes["get_data"] is None:
-            command = "python3 get.py"  # Gerçek dosya adını buraya yaz
+            command = "python3 get.py"
             thread = threading.Thread(target=self.run_command, args=(command, "get_data"))
             thread.start()
         else:
-            self.log("Get Data zaten çalışıyor!")
+            self.log("Get Data zaten çalışıyor!", "get_data")
     
     def stop_process(self, process_key):
         """Belirtilen süreci durdur"""
@@ -114,23 +128,22 @@ class SimulationGUI:
                 if os.name == 'nt':  # Windows
                     subprocess.call(['taskkill', '/F', '/T', '/PID', str(process.pid)])
                 else:  # Unix/Linux
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Grup olarak sonlandır
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 process.wait(timeout=3)
-                self.log(f"{process_key.capitalize()} durduruldu.")
+                self.log(f"{process_key.capitalize()} durduruldu.", process_key if process_key == "get_data" else "sim_server")
             except Exception as e:
-                self.log(f"{process_key.capitalize()} durdurulurken hata: {str(e)}")
+                self.log(f"{process_key.capitalize()} durdurulurken hata: {str(e)}", process_key if process_key == "get_data" else "sim_server")
                 if os.name != 'nt':
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)  # Zorla kapat
-                self.log(f"{process_key.capitalize()} zorla kapatıldı.")
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                self.log(f"{process_key.capitalize()} zorla kapatıldı.", process_key if process_key == "get_data" else "sim_server")
             finally:
                 self.processes[process_key] = None
         else:
-            self.log(f"{process_key.capitalize()} zaten kapalı veya çalışmıyor.")
+            self.log(f"{process_key.capitalize()} zaten kapalı veya çalışmıyor.", process_key if process_key == "get_data" else "sim_server")
     
     def stop_world(self):
         """Gazebo simülasyonunu durdur"""
         self.stop_process("world")
-        # ROS için ek temizlik (opsiyonel)
         if self.processes["world"] is None:
             subprocess.run("rosnode kill -a", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run("killall -9 gzserver gzclient", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -145,10 +158,10 @@ class SimulationGUI:
     
     def stop_all(self):
         """Hepsini durdur"""
-        self.log("Tüm süreçler durduruluyor...")
+        self.log("Tüm süreçler durduruluyor...", "sim_server")
+        self.log("Tüm süreçler durduruluyor...", "get_data")
         for key in self.processes.keys():
             self.stop_process(key)
-        # ROS ve Gazebo için genel temizlik
         subprocess.run("rosnode kill -a", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run("killall -9 gzserver gzclient", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
